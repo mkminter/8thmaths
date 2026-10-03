@@ -785,12 +785,12 @@ function quizView() {
     <p class="kicker">${esc(quiz.label)} · Question ${quiz.index+1} of ${quiz.items.length}</p>
     <div class="progress"><div style="width:${((quiz.index+1)/quiz.items.length)*100}%"></div></div>
     <p class="tag">${q.part===3?"Extra":"Part "+q.part} · ${esc(q.chapterTitle)} · ${levelName(levelOf(q))}</p>
+    <button class="btn primary submit-top" type="button" data-submit>Submit test</button>
     <div class="qtext">${q.question}</div>
     ${opts}
     <div class="row" style="margin-top:8px">
       <button class="btn" type="button" data-prev ${quiz.index===0?"disabled":""}>Back</button>
       ${last ? "" : `<button class="btn" type="button" data-next>Next</button>`}
-      <button class="btn primary" type="button" data-submit>Submit test</button>
     </div>
     <p class="muted">${answered} of ${quiz.items.length} answered. A blank counts as wrong.</p>
     ${quiz.items.length < quiz.want ? `<p class="muted">Only ${quiz.items.length} different questions were available (${quiz.available} matched this chapter and level choice), so this test has ${quiz.items.length} instead of ${quiz.want}. No question was repeated.</p>` : ""}

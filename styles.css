@@ -147,3 +147,5 @@ select {
   padding: 8px 0 4px; margin-bottom: 8px;
 }
 .paper-actions .muted { margin-bottom: 8px; }
+
+.submit-top { display: block; width: 100%; margin: 4px 0 14px; }
