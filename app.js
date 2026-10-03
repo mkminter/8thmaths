@@ -141,12 +141,23 @@ const CHAPTERS = [
     "Trapezium: half × (sum of the parallel sides) × height.",
     "Circle: πr². With π = 22/7, a radius of 7 cm gives area 154 cm².",
     "A cut-out shape: subtract the piece you remove."
+  ]},
+  {part:3,n:1,title:"Foundation practice",paras:[
+    "This extra set practises the kinds of steps used in foundation tests: powers, ratios, angles, greatest integers, and assertion-reason.",
+    "The questions are original. They are not copied from a paper. Choose Low, Medium, or Complex when you start a test. This set is not inside the mid-year or full-year presets unless you tick it."
+  ],points:[
+    "Low means one clear step. Medium means about two steps. Complex means a longer chain.",
+    "Tan of an acute angle is the opposite side divided by the adjacent side.",
+    "For an acute angle, sin squared plus cos squared is 1, and sine cannot be more than 1.",
+    "The floor of a number is the greatest integer less than or equal to it. For a negative number that is not an integer, the floor is more negative.",
+    "In a cyclic quadrilateral, opposite angles add up to 180 degrees.",
+    "An assertion-reason item asks if each sentence is true, and whether the reason really explains the assertion."
   ]}
 ];
 
 const state = {
   view: "home",
-  setup: { mode: "one", chapterKey: "1-1", chosen: {"1-1": true, "1-2": true}, length: 30 },
+  setup: { mode: "one", chapterKey: "1-1", chosen: {"1-1": true, "1-2": true}, length: 30, level: "medium" },
   quiz: null
 };
 
@@ -162,6 +173,14 @@ function bank() {
 }
 function countFor(part, n) {
   return bank().filter(q => q.part === part && q.chapter === n).length;
+}
+function levelOf(q) { return q.level || "medium"; }
+function levelName(lv) {
+  return { low: "Low", medium: "Medium", complex: "Complex", all: "All levels" }[lv] || "Medium";
+}
+function chapterLabel(ch) {
+  if (ch.part === 3) return "Extra · " + ch.title;
+  return "Part " + ch.part + " · " + ch.n + ". " + ch.title;
 }
 function shuffle(list) {
   const a = list.slice();
@@ -192,26 +211,42 @@ function poolForSetup() {
     rows = rows.filter(q => chosen.has(q.part + "-" + q.chapter));
   } else if (s.mode === "part1") {
     rows = rows.filter(q => q.part === 1);
+  } else if (s.mode === "full") {
+    rows = rows.filter(q => q.part === 1 || q.part === 2);
+  }
+  if (s.level !== "all") {
+    const wantLevel = s.level || "medium";
+    rows = rows.filter(q => levelOf(q) === wantLevel);
   }
   return rows;
 }
 function scopeLabel() {
   const s = state.setup;
+  let base;
   if (s.mode === "one") {
     const ch = chapterByKey(s.chapterKey);
-    return "Part " + ch.part + " · " + ch.title;
-  }
-  if (s.mode === "many") {
+    base = (ch.part === 3 ? "Extra · " : "Part " + ch.part + " · ") + ch.title;
+  } else if (s.mode === "many") {
     const n = Object.keys(s.chosen).filter(k => s.chosen[k]).length;
-    return n + " chosen chapter" + (n === 1 ? "" : "s");
+    base = n + " chosen chapter" + (n === 1 ? "" : "s");
+  } else if (s.mode === "part1") {
+    base = "Mid-year · all of Part 1";
+  } else {
+    base = "Full year · Part 1 and Part 2";
   }
-  if (s.mode === "part1") return "Mid-year · all of Part 1";
-  return "Full year · Part 1 and Part 2";
+  return base + " · " + levelName(s.level);
 }
 
 function startQuiz() {
   const rows = poolForSetup();
   const want = state.setup.length;
+  if (!rows.length) {
+    state.quiz = { items: [], index: 0, want, available: 0, label: scopeLabel(), done: false };
+    state.view = "quiz";
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
   const shuffled = shuffle(rows);
   const picked = [];
   const usedStem = new Set();
@@ -247,6 +282,7 @@ function homeView() {
     <h1>Practise Class 8 mathematics, chapter by chapter.</h1>
     <p>The books are <b>Ganita Prakash</b>, Textbook of Mathematics, Grade 8, <b>Part I</b> and <b>Part II</b>. This page explains the ideas, then gives you a fresh MCQ test.</p>
     <p class="muted">The questions are original practice on these topics. They are not copied from the textbook. Names and numbers are our own. Each test is a new shuffle, not a fixed paper.</p>
+    <p>When you start a test, choose Low, Medium, or Complex. If a question has no level marked, it counts as medium.</p>
     <div class="row">
       <button class="btn primary" type="button" data-view="learn">Read a chapter</button>
       <button class="btn" type="button" data-view="test">Start a test</button>
@@ -260,13 +296,13 @@ function homeView() {
 }
 
 function learnView() {
-  const parts = [1, 2];
+  const parts = [1, 2, 3];
   const body = parts.map(part => {
-    const title = part === 1 ? "Part I · mid-year book" : "Part II · rest of the year";
+    const title = part === 1 ? "Part I · mid-year book" : part === 2 ? "Part II · rest of the year" : "Extra set · choose it in the test";
     const items = CHAPTERS.filter(ch => ch.part === part).map(ch => {
       const n = countFor(ch.part, ch.n);
       return `<details class="chap">
-        <summary><span class="tag">Ch ${ch.n}</span> ${esc(ch.title)} <span class="muted" style="font-weight:500">${n} questions</span></summary>
+        <summary><span class="tag">${ch.part===3?"Extra":"Ch "+ch.n}</span> ${esc(ch.title)} <span class="muted" style="font-weight:500">${n} questions</span></summary>
         ${ch.paras.map(p => `<p>${esc(p)}</p>`).join("")}
         <ul class="points">${ch.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>
         <p><button class="btn" type="button" data-start-one="${keyOf(ch)}">Test this chapter</button></p>
@@ -279,10 +315,10 @@ function learnView() {
 
 function testView() {
   const s = state.setup;
-  const options = CHAPTERS.map(ch => `<option value="${keyOf(ch)}" ${s.chapterKey===keyOf(ch)?"selected":""}>Part ${ch.part} · ${ch.n}. ${esc(ch.title)}</option>`).join("");
+  const options = CHAPTERS.map(ch => `<option value="${keyOf(ch)}" ${s.chapterKey===keyOf(ch)?"selected":""}>${esc(chapterLabel(ch))}</option>`).join("");
   const checks = CHAPTERS.map(ch => {
     const k = keyOf(ch);
-    return `<label><input type="checkbox" data-ch="${k}" ${s.chosen[k]?"checked":""}> Part ${ch.part} · ${ch.n}. ${esc(ch.title)}</label>`;
+    return `<label><input type="checkbox" data-ch="${k}" ${s.chosen[k]?"checked":""}> ${esc(chapterLabel(ch))}</label>`;
   }).join("");
   const modes = [
     ["one","One chapter","A short test on a single chapter."],
@@ -291,8 +327,11 @@ function testView() {
     ["full","Full year","Part 1 and Part 2 together."]
   ];
   const lens = [30,40,50].map(n => `<button type="button" class="len ${s.length===n?"selected":""}" data-len="${n}">${n}</button>`).join("");
+  const levels = [["low","Low"],["medium","Medium"],["complex","Complex"],["all","All levels"]].map(([id,name]) =>
+    `<button type="button" class="len lvl ${s.level===id?"selected":""}" data-level="${id}">${name}</button>`).join("");
   const many = Object.keys(s.chosen).filter(k => s.chosen[k]).length;
   const ready = s.mode !== "many" || many > 0;
+  const poolN = poolForSetup().length;
   return `${header()}
   <section class="hero">
     <h1>Make a test</h1>
@@ -307,15 +346,25 @@ function testView() {
     ${s.mode==="many" ? `<div class="checks" style="margin-top:12px">${checks}</div>` : ""}
   </section>
   <section class="card">
+    <h2>How hard?</h2>
+    <div class="row">${levels}</div>
+    <p class="muted" style="margin-top:10px">Low is one step. Medium is about two steps. Complex is a longer foundation-style chain. A question with no level counts as medium. All levels ignores that filter.</p>
+  </section>
+  <section class="card">
     <h2>How many questions?</h2>
     <div class="row">${lens}</div>
-    <p class="muted" style="margin-top:10px">${esc(scopeLabel())}. About ${poolForSetup().length} questions are available to draw from.</p>
-    <button class="btn primary" type="button" data-start ${ready?"":"disabled"}>Start ${s.length} questions</button>
+    <p class="muted" style="margin-top:10px">${esc(scopeLabel())}. ${poolN} question${poolN===1?"":"s"} available to draw from.</p>
+    <button class="btn primary" type="button" data-start ${ready && poolN>0?"":"disabled"}>Start ${s.length} questions</button>
+    ${poolN===0 ? `<p class="muted">No questions match this chapter and level. Try All levels, or tick Extra · Foundation practice.</p>` : ""}
+    ${poolN>0 && poolN<s.length ? `<p class="muted">Only ${poolN} different questions are available, so the test will be shorter than ${s.length}. Nothing is repeated.</p>` : ""}
   </section>`;
 }
 
 function quizView() {
   const quiz = state.quiz;
+  if (!quiz.items.length) {
+    return `${header()}<section class="card"><h1>No questions for this choice</h1><p>Nothing in the bank matches ${esc(quiz.label)}.</p><button class="btn" type="button" data-view="test">Change the test</button></section>`;
+  }
   if (quiz.done) return resultView();
   const q = quiz.items[quiz.index];
   const answered = quiz.items.filter(item => item.pick !== null).length;
@@ -327,7 +376,7 @@ function quizView() {
   <section class="card">
     <p class="kicker">${esc(quiz.label)} · Question ${quiz.index+1} of ${quiz.items.length}</p>
     <div class="progress"><div style="width:${((quiz.index+1)/quiz.items.length)*100}%"></div></div>
-    <p class="tag">Part ${q.part} · ${esc(q.chapterTitle)}</p>
+    <p class="tag">${q.part===3?"Extra":"Part "+q.part} · ${esc(q.chapterTitle)} · ${levelName(levelOf(q))}</p>
     <div class="qtext">${q.question}</div>
     ${opts}
     <div class="row" style="margin-top:8px">
@@ -336,7 +385,7 @@ function quizView() {
       <button class="btn primary" type="button" data-submit>Submit test</button>
     </div>
     <p class="muted">${answered} of ${quiz.items.length} answered. A blank counts as wrong.</p>
-    ${quiz.items.length < quiz.want ? `<p class="muted">Only ${quiz.items.length} different questions were available in this choice, so the test is shorter than ${quiz.want}.</p>` : ""}
+    ${quiz.items.length < quiz.want ? `<p class="muted">Only ${quiz.items.length} different questions were available (${quiz.available} matched this chapter and level choice), so this test has ${quiz.items.length} instead of ${quiz.want}. No question was repeated.</p>` : ""}
   </section>`;
 }
 
@@ -348,7 +397,7 @@ function resultView() {
     if (right) score++;
     const yours = q.pick === null ? "Not answered" : q.options[q.pick];
     return `<article class="card review ${right?"ok":"no"}">
-      <p class="kicker">Question ${idx+1} · Part ${q.part} · ${esc(q.chapterTitle)} · ${right?"Right":"Wrong"}</p>
+      <p class="kicker">Question ${idx+1} · ${q.part===3?"Extra":"Part "+q.part} · ${esc(q.chapterTitle)} · ${levelName(levelOf(q))} · ${right?"Right":"Wrong"}</p>
       <div class="qtext">${q.question}</div>
       <p><b>Your answer:</b> ${esc(yours)}</p>
       <p><b>Correct answer:</b> ${esc(q.options[q.answer])}</p>
@@ -398,6 +447,11 @@ document.getElementById("app").addEventListener("click", (event) => {
   }
   if (t.dataset.len) {
     state.setup.length = Number(t.dataset.len);
+    render();
+    return;
+  }
+  if (t.dataset.level) {
+    state.setup.level = t.dataset.level;
     render();
     return;
   }
