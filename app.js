@@ -172,7 +172,7 @@ function bank() {
   return (window.QUESTION_BANK || []);
 }
 function countFor(part, n) {
-  return bank().filter(q => q.part === part && q.chapter === n).length;
+  return bank().filter(q => q.part === part && q.chapter === n && isMcqBank(q)).length;
 }
 function levelOf(q) { return q.level || "medium"; }
 function levelName(lv) {
@@ -197,12 +197,16 @@ function fresh(q) {
   const order = shuffle([0, 1, 2, 3]);
   const options = order.map(i => q.options[i]);
   const answer = order.indexOf(q.answer);
-  return { id: q.id, part: q.part, chapter: q.chapter, chapterTitle: q.chapterTitle, question: q.question, options, answer, reason: q.reason, pick: null };
+  return { id: q.id, part: q.part, chapter: q.chapter, chapterTitle: q.chapterTitle, question: q.question, options, answer, reason: q.reason, level: q.level, pick: null };
+}
+
+function isMcqBank(q) {
+  return Array.isArray(q.options) && q.options.length === 4 && Number.isInteger(q.answer);
 }
 
 function poolForSetup() {
   const s = state.setup;
-  let rows = bank();
+  let rows = bank().filter(isMcqBank);
   if (s.mode === "one") {
     const ch = chapterByKey(s.chapterKey);
     rows = rows.filter(q => q.part === ch.part && q.chapter === ch.n);
@@ -263,34 +267,294 @@ function startQuiz() {
   window.scrollTo(0, 0);
 }
 
+function takeOnePerTopic(rows, slot) {
+  const groups = new Map();
+  rows.forEach(q => {
+    if (q.paperSlot !== slot) return;
+    const k = q.paperTopic || q.id;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(q);
+  });
+  const out = [];
+  groups.forEach(arr => { out.push(shuffle(arr)[0]); });
+  return out;
+}
+
+function takeMixed(rows, slot, total, orWant) {
+  const pool = shuffle(rows.filter(q => q.paperSlot === slot));
+  const withOr = pool.filter(q => q.orQuestion);
+  const plain = pool.filter(q => !q.orQuestion);
+  const picked = withOr.slice(0, orWant).concat(plain.slice(0, total - Math.min(orWant, withOr.length)));
+  if (picked.length < total) {
+    const used = new Set(picked.map(q => q.id));
+    pool.forEach(q => {
+      if (picked.length < total && !used.has(q.id)) picked.push(q);
+    });
+  }
+  return shuffle(picked.slice(0, total));
+}
+
+function clonePaperItem(q, number) {
+  return {
+    id: q.id,
+    number: number,
+    marks: q.marks || 1,
+    level: q.level || "medium",
+    part: q.part,
+    chapterTitle: q.chapterTitle,
+    paperSlot: q.paperSlot,
+    paperTopic: q.paperTopic || "",
+    question: q.question,
+    worked: q.worked || q.reason || "",
+    orQuestion: q.orQuestion || "",
+    orWorked: q.orWorked || "",
+    options: q.options ? q.options.slice() : null,
+    answer: Number.isInteger(q.answer) ? q.answer : null,
+    pick: null,
+    self: null,
+    revealed: false,
+    parts: (q.parts || []).map(p => ({
+      label: p.label,
+      marks: p.marks,
+      question: p.question,
+      worked: p.worked || "",
+      orQuestion: p.orQuestion || "",
+      orWorked: p.orWorked || "",
+      self: null
+    }))
+  };
+}
+
+function paperRows(rows, kind) {
+  if (kind === "year") return rows.filter(q => q.part === 1 || q.part === 2 || q.part === 3);
+  return rows.filter(q => q.part === 1);
+}
+
+function topicReps(rows, slot) {
+  const groups = new Map();
+  rows.forEach(q => {
+    if (q.paperSlot !== slot) return;
+    const k = q.paperTopic || q.id;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(q);
+  });
+  const out = [];
+  groups.forEach(arr => { out.push(shuffle(arr)[0]); });
+  return out;
+}
+
+function takeSectionA(rows, minLater) {
+  const pool = rows.filter(q => q.paperSlot === "A");
+  const reps = topicReps(pool, "A");
+  const later = shuffle(reps.filter(q => q.part !== 1));
+  const early = shuffle(reps.filter(q => q.part === 1));
+  const picked = [];
+  const usedTopics = new Set();
+  later.slice(0, minLater).forEach(q => {
+    picked.push(q);
+    usedTopics.add(q.paperTopic || q.id);
+  });
+  later.concat(early).forEach(q => {
+    const key = q.paperTopic || q.id;
+    if (picked.length >= 18 || usedTopics.has(key)) return;
+    picked.push(q);
+    usedTopics.add(key);
+  });
+  const used = new Set(picked.map(q => q.id));
+  shuffle(pool).forEach(q => {
+    if (picked.length < 18 && !used.has(q.id)) {
+      picked.push(q);
+      used.add(q.id);
+    }
+  });
+  return shuffle(picked.slice(0, 18));
+}
+
+function takeAR(rows, minLater) {
+  const reps = topicReps(rows, "AR");
+  const later = shuffle(reps.filter(q => q.part !== 1));
+  const early = shuffle(reps.filter(q => q.part === 1));
+  const picked = later.slice(0, minLater);
+  const used = new Set(picked.map(q => q.id));
+  early.concat(later).forEach(q => {
+    if (picked.length < 2 && !used.has(q.id)) {
+      picked.push(q);
+      used.add(q.id);
+    }
+  });
+  return shuffle(picked.slice(0, 2));
+}
+
+function takeMixedQuota(rows, slot, total, orWant, minLater) {
+  const pool = shuffle(rows.filter(q => q.paperSlot === slot));
+  const later = pool.filter(q => q.part !== 1);
+  const picked = [];
+  const used = new Set();
+  function push(q) {
+    if (!q || used.has(q.id) || picked.length >= total) return false;
+    picked.push(q);
+    used.add(q.id);
+    return true;
+  }
+  later.slice(0, minLater).forEach(push);
+  let orCount = picked.filter(q => q.orQuestion).length;
+  pool.forEach(q => {
+    if (orCount >= orWant) return;
+    if (q.orQuestion && push(q)) orCount++;
+  });
+  pool.forEach(push);
+  return shuffle(picked.slice(0, total));
+}
+
+function takeCases(rows, kind) {
+  const pool = rows.filter(q => q.paperSlot === "E");
+  if (kind !== "year") {
+    return ["odds", "powers", "proportion"].map(topic => {
+      const group = shuffle(pool.filter(q => q.paperTopic === topic));
+      return group[0] || null;
+    });
+  }
+  const groups = new Map();
+  pool.forEach(q => {
+    const k = q.paperTopic || q.id;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(q);
+  });
+  const topics = shuffle([...groups.keys()]);
+  const later = topics.filter(t => groups.get(t).some(q => q.part !== 1));
+  const early = topics.filter(t => later.indexOf(t) === -1);
+  const chosen = [];
+  if (later.length) chosen.push(later[0]);
+  shuffle(later.slice(1).concat(early)).forEach(t => {
+    if (chosen.length < 3 && chosen.indexOf(t) === -1) chosen.push(t);
+  });
+  return shuffle(chosen).slice(0, 3).map(t => shuffle(groups.get(t))[0]);
+}
+
+function examSections(secA, secB, secC, secD, secE) {
+  return [
+    { id: "A", title: "Section A", right: "(20 × 1 = 20)", blurb: "Questions 1 to 18 carry 1 mark each. Questions 19 and 20 are assertion-reason questions of 1 mark each.", items: secA },
+    { id: "B", title: "Section B", right: "(5 × 2 = 10)", blurb: "Very short answer questions of 2 marks each.", items: secB },
+    { id: "C", title: "Section C", right: "(6 × 3 = 18)", blurb: "Short answer questions of 3 marks each.", items: secC },
+    { id: "D", title: "Section D", right: "(4 × 5 = 20)", blurb: "Long answer questions of 5 marks each.", items: secD },
+    { id: "E", title: "Section E", right: "(3 × 4 = 12)", blurb: "Case-study questions of 4 marks each. The sub-parts carry 1, 1 and 2 marks.", items: secE }
+  ];
+}
+
+function buildExamPaper(rows, kind) {
+  const year = kind === "year";
+  const pool = paperRows(rows, year ? "year" : "half");
+  const minA = year ? 4 : 0;
+  const minLater = year ? 1 : 0;
+  const aPick = takeSectionA(pool, minA);
+  const arFinal = takeAR(pool, minLater);
+  const B = takeMixedQuota(pool, "B", 5, 2, year ? 2 : 0);
+  const C = takeMixedQuota(pool, "C", 6, 2, year ? 2 : 0);
+  const D = takeMixedQuota(pool, "D", 4, 2, year ? 1 : 0);
+  const E = takeCases(pool, year ? "year" : "half");
+  const groups = [["A", aPick, 18], ["AR", arFinal, 2], ["B", B, 5], ["C", C, 6], ["D", D, 4], ["E", E, 3]];
+  for (const [name, arr, n] of groups) {
+    if (!arr || arr.length < n || arr.some(q => !q)) {
+      return { error: "Not enough questions to build section " + name + ".", sections: [], kind: year ? "year" : "half" };
+    }
+  }
+  let n = 1;
+  return {
+    error: "",
+    scored: false,
+    kind: year ? "year" : "half",
+    examName: year ? "Yearly Examination" : "Half Yearly Examination",
+    sections: examSections(
+      aPick.concat(arFinal).map(q => clonePaperItem(q, n++)),
+      B.map(q => clonePaperItem(q, n++)),
+      C.map(q => clonePaperItem(q, n++)),
+      D.map(q => clonePaperItem(q, n++)),
+      E.map(q => clonePaperItem(q, n++))
+    )
+  };
+}
+
+function buildHalfYearlyPaper(rows) {
+  return buildExamPaper(rows, "half");
+}
+
+function startPaper(kind) {
+  state.paper = buildExamPaper(bank(), kind === "year" ? "year" : "half");
+  state.view = "paper";
+  state.keepScroll = false;
+  render();
+  window.scrollTo(0, 0);
+}
+
+function paperItems() {
+  const out = [];
+  (state.paper.sections || []).forEach(sec => sec.items.forEach(item => out.push(item)));
+  return out;
+}
+function findPaperItem(num) {
+  return paperItems().find(item => item.number === Number(num)) || null;
+}
+function isPaperMcq(item) {
+  return Array.isArray(item.options);
+}
+function itemScore(item) {
+  if (isPaperMcq(item)) return item.pick === item.answer ? item.marks : 0;
+  if (item.orQuestion || !item.parts.length) return item.self === true ? item.marks : 0;
+  return item.parts.reduce((sum, part) => sum + (part.self === true ? part.marks : 0), 0);
+}
+function itemMarked(item) {
+  if (isPaperMcq(item)) return item.pick !== null;
+  if (item.orQuestion || !item.parts.length) return item.self !== null;
+  return item.parts.every(part => part.self !== null);
+}
+function paperTotals() {
+  const items = paperItems();
+  let mcq = 0, mcqMax = 0, written = 0, writtenMax = 0, unmarked = 0;
+  items.forEach(item => {
+    if (isPaperMcq(item)) {
+      mcqMax += item.marks;
+      mcq += itemScore(item);
+    } else {
+      writtenMax += item.marks;
+      written += itemScore(item);
+      if (!itemMarked(item)) unmarked += 1;
+    }
+  });
+  return { mcq, mcqMax, written, writtenMax, total: mcq + written, max: mcqMax + writtenMax, unmarked };
+}
+
 function header() {
   const views = [["home","Home"],["learn","Learn"],["test","Test"]];
+  const onTest = state.view === "quiz" || state.view === "paper" || state.view === "test";
   return `<header class="top">
     <div class="brand"><b>Class 8 Maths</b><span>Ganita Prakash practice</span></div>
     <nav class="nav">${views.map(([id,name]) =>
-      `<button type="button" data-view="${id}" ${state.view===id||(state.view==="quiz"&&id==="test")?"aria-current=\"page\"":""}>${name}</button>`
+      `<button type="button" data-view="${id}" ${state.view===id||(onTest&&id==="test")?"aria-current=\"page\"":""}>${name}</button>`
     ).join("")}</nav>
   </header>`;
 }
 
 function homeView() {
-  const n = bank().length;
-  const figs = bank().filter(q => q.question.includes("<svg")).length;
+  const n = bank().filter(isMcqBank).length;
+  const figs = bank().filter(q => String(q.question).includes("<svg")).length;
   return `${header()}
   <section class="hero">
     <p class="kicker">CBSE · NCERT · 2026-27</p>
     <h1>Practise Class 8 mathematics, chapter by chapter.</h1>
-    <p>The books are <b>Ganita Prakash</b>, Textbook of Mathematics, Grade 8, <b>Part I</b> and <b>Part II</b>. This page explains the ideas, then gives you a fresh MCQ test.</p>
-    <p class="muted">The questions are original practice on these topics. They are not copied from the textbook. Names and numbers are our own. Each test is a new shuffle, not a fixed paper.</p>
-    <p>When you start a test, choose Low, Medium, or Complex. If a question has no level marked, it counts as medium.</p>
+    <p>The books are <b>Ganita Prakash</b>, Textbook of Mathematics, Grade 8, <b>Part I</b> and <b>Part II</b>. This page explains the ideas, then gives you a fresh MCQ test, a half-yearly paper, or a yearly paper.</p>
+    <p class="muted">The questions are original practice on these topics. They are not copied from the textbook or from a school paper. Names and numbers are our own.</p>
+    <p>When you start a chapter test, choose Low, Medium, or Complex. If a question has no level marked, it counts as medium.</p>
     <div class="row">
       <button class="btn primary" type="button" data-view="learn">Read a chapter</button>
-      <button class="btn" type="button" data-view="test">Start a test</button>
+      <button class="btn" type="button" data-view="test">Chapter test</button>
+      <button class="btn primary" type="button" data-start-paper>Half-yearly paper</button>
+      <button class="btn primary" type="button" data-start-year>Yearly paper</button>
     </div>
   </section>
   <section class="card">
-    <h2>${n} questions ready</h2>
-    <p>${figs} of them include a diagram. A test is 30 questions by default. You can also choose 40 or 50. One mark each.</p>
+    <h2>${n} multiple-choice questions ready</h2>
+    <p>${figs} questions include a diagram. A chapter test is 30 questions by default. You can also choose 40 or 50. One mark each.</p>
+    <p>The half-yearly paper and the yearly paper are 80-mark sheets with the same sections. Half-yearly uses Part 1. Yearly uses Part 1 and Part 2. Each run is a new shuffle.</p>
     <p>Mid-year uses all of Part 1. The full-year test uses Part 1 and Part 2. You can also pick a single chapter, or a few chapters together.</p>
   </section>`;
 }
@@ -310,7 +574,7 @@ function learnView() {
     }).join("");
     return `<h2 class="part-label">${title}</h2>${items}`;
   }).join("");
-  return `${header()}<section class="hero"><h1>Learn</h1><p>Short notes for every chapter in Ganita Prakash. Open one, then test it when you are ready.</p></section>${body}`;
+  return `${header()}<section class="hero"><h1>Learn</h1><p>Short notes for every chapter in Ganita Prakash. Open one, then test it when you are ready. The full papers are on the Test page.</p></section>${body}`;
 }
 
 function testView() {
@@ -333,9 +597,18 @@ function testView() {
   const ready = s.mode !== "many" || many > 0;
   const poolN = poolForSetup().length;
   return `${header()}
+  <section class="card paper-launch">
+    <h2>Full papers</h2>
+    <p>Both papers are Class 8 Mathematics, 80 marks, 3 hours, with the same sections. Multiple choice is marked for you. For written parts, press Check and mark your own work.</p>
+    <div class="row">
+      <button class="btn primary" type="button" data-start-paper>Half-yearly paper</button>
+      <button class="btn primary" type="button" data-start-year>Yearly paper</button>
+    </div>
+    <p class="muted">Half-yearly draws Part 1 only. Yearly draws Part 1 and Part 2, including foundation-style questions. Two runs use different questions. The level buttons below do not change these papers.</p>
+  </section>
   <section class="hero">
-    <h1>Make a test</h1>
-    <p>Default length is 30 MCQs. Each run picks a different set, so the next test will not be a copy of this one.</p>
+    <h1>Chapter test</h1>
+    <p>Default length is 30 MCQs. Each run picks a different set. Low, Medium, and Complex still apply here.</p>
   </section>
   <section class="card">
     <h2>What should the test cover?</h2>
@@ -348,7 +621,7 @@ function testView() {
   <section class="card">
     <h2>How hard?</h2>
     <div class="row">${levels}</div>
-    <p class="muted" style="margin-top:10px">Low is one step. Medium is about two steps. Complex is a longer foundation-style chain. A question with no level counts as medium. All levels ignores that filter.</p>
+    <p class="muted" style="margin-top:10px">Low is one step. Medium is about two steps. Complex is a longer chain. A question with no level counts as medium. All levels ignores that filter. This choice does not change the half-yearly or yearly paper. Those papers mix levels the way a full paper does.</p>
   </section>
   <section class="card">
     <h2>How many questions?</h2>
@@ -357,6 +630,141 @@ function testView() {
     <button class="btn primary" type="button" data-start ${ready && poolN>0?"":"disabled"}>Start ${s.length} questions</button>
     ${poolN===0 ? `<p class="muted">No questions match this chapter and level. Try All levels, or tick Extra · Foundation practice.</p>` : ""}
     ${poolN>0 && poolN<s.length ? `<p class="muted">Only ${poolN} different questions are available, so the test will be shorter than ${s.length}. Nothing is repeated.</p>` : ""}
+  </section>`;
+}
+
+function modelBox(text) {
+  return `<div class="model">${esc(text)}</div>`;
+}
+function selfButtons(item, partIndex) {
+  const current = partIndex === null ? item.self : item.parts[partIndex].self;
+  const partAttr = partIndex === null ? -1 : partIndex;
+  return `<div class="row sans">
+    <button type="button" class="btn tiny ${current===true?"goodbtn":""}" data-self="1" data-q="${item.number}" data-part="${partAttr}">Mark right</button>
+    <button type="button" class="btn tiny ${current===false?"badbtn":""}" data-self="0" data-q="${item.number}" data-part="${partAttr}">Mark wrong</button>
+  </div>`;
+}
+function renderParts(item, allowSelf) {
+  if (!item.parts.length) return "";
+  return item.parts.map((part, pi) => `
+    <div class="part">
+      <div class="qtop">
+        <span class="qno">${esc(part.label)}</span>
+        <div class="qbody">${part.question}</div>
+        <span class="qmarks">[${part.marks}]</span>
+      </div>
+      ${part.orQuestion ? `<p class="orline">OR</p><div class="qbody orbody">${esc(part.orQuestion)}</div>` : ""}
+      ${item.revealed ? modelBox(part.worked) : ""}
+      ${item.revealed && part.orWorked ? modelBox("OR: " + part.orWorked) : ""}
+      ${item.revealed && allowSelf ? selfButtons(item, pi) : ""}
+    </div>`).join("");
+}
+function renderMcq(item) {
+  const letters = ["A", "B", "C", "D"];
+  const opts = item.options.map((op, i) => {
+    let cls = "opt";
+    if (item.pick === i) cls += " selected";
+    if (item.revealed && i === item.answer) cls += " correct";
+    else if (item.revealed && item.pick === i) cls += " wrong";
+    return `<button type="button" class="${cls}" data-paper-pick="${i}" data-q="${item.number}" ${state.paper&&state.paper.scored?"disabled":""}>${letters[i]}. ${esc(op)}</button>`;
+  }).join("");
+  const why = item.revealed ? modelBox("Answer: " + item.options[item.answer] + ". " + item.worked) : "";
+  return opts + why;
+}
+function renderWritten(item) {
+  const whole = !!(item.orQuestion || !item.parts.length);
+  let html = renderParts(item, !item.orQuestion && item.parts.length > 0);
+  if (item.orQuestion) {
+    html += `<p class="orline">OR</p><div class="qbody orbody">${esc(item.orQuestion)}</div>`;
+  }
+  if (item.revealed && whole && item.worked) html += modelBox(item.worked);
+  if (item.revealed && item.orWorked) html += modelBox("OR: " + item.orWorked);
+  if (item.revealed && whole) html += selfButtons(item, null);
+  if (!item.revealed) {
+    html += `<div class="row sans"><button type="button" class="btn tiny" data-reveal="${item.number}">Check</button></div>`;
+  }
+  return html;
+}
+function renderPaperItem(item) {
+  const mcq = isPaperMcq(item);
+  return `<article class="qitem" id="q-${item.number}">
+    <div class="qtop">
+      <span class="qno">Q${item.number}.</span>
+      <div class="qbody">${item.question}</div>
+      <span class="qmarks">[${item.marks}]</span>
+    </div>
+    ${mcq ? renderMcq(item) : renderWritten(item)}
+  </article>`;
+}
+
+function paperView() {
+  const paper = state.paper;
+  if (!paper || paper.error) {
+    return `${header()}<section class="card"><h1>Paper could not be built</h1><p>${esc(paper && paper.error ? paper.error : "Try again.")}</p>
+      <button class="btn" type="button" data-view="test">Back</button></section>`;
+  }
+  const totals = paperTotals();
+  const scoreBar = paper.scored
+    ? `<p class="score">${totals.total} / ${totals.max}</p>
+       <p>Multiple choice ${totals.mcq} / ${totals.mcqMax}. Written work you marked right: ${totals.written} / ${totals.writtenMax}.</p>
+       ${totals.unmarked ? `<p class="muted">${totals.unmarked} written question${totals.unmarked===1?"":"s"} still unmarked. Unmarked work scores 0 until you choose right or wrong.</p>` : ""}`
+    : `<p>Tap an option for each multiple-choice question. For the other questions, do the working on paper, then press Check. Score the paper when you want every model answer.</p>
+       <p class="muted">Do either the question or the OR choice, not both.</p>`;
+  const sections = paper.sections.map(sec => {
+    const body = sec.items.map(item => {
+      const dir = (sec.id === "A" && item.number === 19)
+        ? `<div class="directions"><p><b>Questions 19 and 20.</b> Each has an Assertion (A) and a Reason (R).</p>
+           <p>(A) Both A and R are true, and R explains A.<br>
+           (B) Both A and R are true, but R does not explain A.<br>
+           (C) A is true and R is false.<br>
+           (D) A is false and R is true.</p></div>`
+        : "";
+      return dir + renderPaperItem(item);
+    }).join("");
+    return `<h2 class="secbar"><span>${esc(sec.title)}</span><span>${esc(sec.right)}</span></h2><p class="secblurb">${esc(sec.blurb)}</p>${body}`;
+  }).join("");
+  const actions = `<div class="row">
+      ${paper.scored ? "" : `<button class="btn primary" type="button" data-score-paper>Score the paper</button>`}
+      <button class="btn" type="button" data-new-paper>New paper</button>
+      <button class="btn" type="button" data-view="test">Chapter test</button>
+    </div>`;
+  return `${header()}
+  <div class="paper-actions sans">
+    <p class="muted">Practice paper for Class 8 Mathematics. The questions are original. They are not a school paper.</p>
+    ${paper.scored ? `<p class="score" style="font-size:1.4rem">${totals.total} / ${totals.max}</p>` : ""}
+    ${actions}
+  </div>
+  <div class="sheet">
+    <header class="exam-kicker">
+      <p class="exam-class">Class VIII</p>
+      <h1>Mathematics</h1>
+      <p class="exam-sub">${esc(paper.examName || "Half Yearly Examination")}</p>
+      <p class="exam-meta"><span>Maximum marks: 80</span><span>Time: 3 hours</span></p>
+    </header>
+    <div class="exam-lines">
+      <div><span>Name</span><i></i></div>
+      <div><span>Roll no.</span><i></i></div>
+      <div><span>Date</span><i></i></div>
+    </div>
+    <h2 class="instr-title">General instructions</h2>
+    <ol class="instr">
+      <li>This question paper has 38 questions. All questions are compulsory.</li>
+      <li>The paper is divided into five sections: A, B, C, D and E.</li>
+      <li>In Section A, questions 1 to 18 are multiple choice questions of 1 mark each.</li>
+      <li>In Section A, questions 19 and 20 are assertion-reason questions of 1 mark each.</li>
+      <li>In Section B, questions 21 to 25 are very short answer questions of 2 marks each.</li>
+      <li>In Section C, questions 26 to 31 are short answer questions of 3 marks each.</li>
+      <li>In Section D, questions 32 to 35 are long answer questions of 5 marks each.</li>
+      <li>In Section E, questions 36 to 38 are case-study questions of 4 marks each, with sub-parts of 1, 1 and 2 marks.</li>
+      <li>There is no overall choice. An internal choice is given in 2 questions of Section B, 2 questions of Section C and 2 questions of Section D. An internal choice is also given in the 2-mark part of each question in Section E.</li>
+      <li>Draw neat figures where they are needed. Take π = 22/7 where it is needed and not stated.</li>
+      <li>Calculators are not allowed.</li>
+    </ol>
+    ${sections}
+  </div>
+  <section class="card sans">
+    ${scoreBar}
+    ${actions}
   </section>`;
 }
 
@@ -419,6 +827,7 @@ function resultView() {
 
 function render() {
   const app = document.getElementById("app");
+  const y = state.keepScroll ? window.scrollY : 0;
   if (!window.QUESTION_BANK) {
     app.innerHTML = `<section class="card"><h1>Questions did not load</h1><p>Keep questions.js in the same folder as index.html, then open index.html again.</p></section>`;
     return;
@@ -428,7 +837,10 @@ function render() {
   else if (state.view === "learn") html = learnView();
   else if (state.view === "test") html = testView();
   else if (state.view === "quiz") html = quizView();
+  else if (state.view === "paper") html = paperView();
   app.innerHTML = html;
+  if (state.keepScroll) window.scrollTo(0, y);
+  state.keepScroll = false;
 }
 
 document.getElementById("app").addEventListener("click", (event) => {
@@ -436,6 +848,7 @@ document.getElementById("app").addEventListener("click", (event) => {
   if (!t) return;
   if (t.dataset.view) {
     state.view = t.dataset.view;
+    state.keepScroll = false;
     render();
     window.scrollTo(0, 0);
     return;
@@ -462,8 +875,58 @@ document.getElementById("app").addEventListener("click", (event) => {
     startQuiz();
     return;
   }
+  if (t.dataset.startYear !== undefined) {
+    startPaper("year");
+    return;
+  }
+  if (t.dataset.startPaper !== undefined) {
+    startPaper("half");
+    return;
+  }
+  if (t.dataset.newPaper !== undefined) {
+    startPaper(state.paper && state.paper.kind === "year" ? "year" : "half");
+    return;
+  }
   if (t.dataset.start !== undefined) {
     startQuiz();
+    return;
+  }
+  if (t.dataset.paperPick !== undefined && state.paper && !state.paper.scored) {
+    const item = findPaperItem(t.dataset.q);
+    if (item && isPaperMcq(item)) {
+      item.pick = Number(t.dataset.paperPick);
+      state.keepScroll = true;
+      render();
+    }
+    return;
+  }
+  if (t.dataset.reveal !== undefined && state.paper) {
+    const item = findPaperItem(t.dataset.reveal);
+    if (item) {
+      item.revealed = true;
+      state.keepScroll = true;
+      render();
+    }
+    return;
+  }
+  if (t.dataset.self !== undefined && state.paper) {
+    const item = findPaperItem(t.dataset.q);
+    if (item) {
+      const part = Number(t.dataset.part);
+      const value = t.dataset.self === "1";
+      if (part >= 0 && item.parts[part]) item.parts[part].self = value;
+      else item.self = value;
+      state.keepScroll = true;
+      render();
+    }
+    return;
+  }
+  if (t.dataset.scorePaper !== undefined && state.paper) {
+    state.paper.scored = true;
+    paperItems().forEach(item => { item.revealed = true; });
+    state.keepScroll = false;
+    render();
+    window.scrollTo(0, 0);
     return;
   }
   if (t.dataset.pick !== undefined && state.quiz && !state.quiz.done) {
